@@ -342,9 +342,9 @@ def fig_sign_flip(c: dict) -> None:
         axes[0],
         ["e1", "e5", "e9*"],
         [
-            ("In-domain 8×8", id_delta, C["in_domain"], HATCH["in_domain"]),
+            ("Обучающая карта 8×8", id_delta, C["in_domain"], HATCH["in_domain"]),
             ("Перенос 8→16", tr, C["transfer"], HATCH["transfer"]),
-            ("Goal-red", red, C["goal_red"], HATCH["goal_red"]),
+            ("Красная цель", red, C["goal_red"], HATCH["goal_red"]),
         ],
         yerrs=[[0.0, 0.0, 0.0], tr_err, red_err],
         signed=True,
@@ -353,7 +353,7 @@ def fig_sign_flip(c: dict) -> None:
         legend=False,
     )
     axes[0].axhline(0, color=INK, linewidth=0.7, zorder=2)
-    axes[0].set_xlabel("Эпоха SFT  ·  лестница C1")
+    axes[0].set_xlabel("Эпоха SFT")
 
     ts = c["c1_ood_e9_trainseed"]
     seeds = ["42", "123", "456"]
@@ -366,7 +366,7 @@ def fig_sign_flip(c: dict) -> None:
         ["42", "123", "456"],
         [
             ("Перенос 8→16", tr_b, C["transfer"], HATCH["transfer"]),
-            ("Goal-red", red_b, C["goal_red"], HATCH["goal_red"]),
+            ("Красная цель", red_b, C["goal_red"], HATCH["goal_red"]),
         ],
         yerrs=[tr_b_err, red_b_err],
         signed=True,
@@ -375,12 +375,12 @@ def fig_sign_flip(c: dict) -> None:
         legend=False,
     )
     axes[1].axhline(0, color=INK, linewidth=0.7, zorder=2)
-    axes[1].set_xlabel("Train seed GRPO  ·  e9")
+    axes[1].set_xlabel("Seed обучения GRPO  ·  SFT эпохи 9")
     axes[1].tick_params(labelleft=False)
     handles = [
-        Patch(facecolor=C["in_domain"], edgecolor="none", label="In-domain"),
+        Patch(facecolor=C["in_domain"], edgecolor="none", label="Обучающая карта 8×8"),
         Patch(facecolor=C["transfer"], edgecolor="none", label="Перенос 8→16"),
-        Patch(facecolor=C["goal_red"], edgecolor="none", label="Goal-red"),
+        Patch(facecolor=C["goal_red"], edgecolor="none", label="Красная цель"),
     ]
     fig.legend(
         handles=handles,
@@ -427,10 +427,10 @@ def fig_memoryless_bayes(c: dict) -> None:
     search_err = [mean_t_ci_half(b["8"]["search_sd"]), mean_t_ci_half(b["16"]["search_sd"])]
     grouped_bars(
         ax,
-        ["Empty 8×8  (cap 12)", "Empty 16×16  (cap 40)"],
+        ["Empty 8×8  (горизонт 12)", "Empty 16×16  (горизонт 40)"],
         [
-            ("spin (left при пустом FOV)", [b["8"]["spin"], b["16"]["spin"]], C["map8"], HATCH["map8"]),
-            ("search (forward при пустом FOV)", [b["8"]["search"], b["16"]["search"]], C["map16"], HATCH["map16"]),
+            ("Поворот (left на пустом кадре)", [b["8"]["spin"], b["16"]["spin"]], C["map8"], HATCH["map8"]),
+            ("Шаг вперёд (forward на пустом кадре)", [b["8"]["search"], b["16"]["search"]], C["map16"], HATCH["map16"]),
         ],
         yerrs=[spin_err, search_err],
         ylim=(0, 118),
@@ -462,7 +462,7 @@ def fig_paint_see(c: dict) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(W_WIDE, H), sharey=True)
     grouped_bars(
         axes[0],
-        ["G1", "PAINT"],
+        ["Generate", "PAINT"],
         [
             ("SFT", [p["g1_sft"], p["paint_sft"]], C["sft"], HATCH["sft"]),
             ("GRPO", [p["g1_grpo"], p["paint_grpo"]], C["grpo"], HATCH["grpo"]),
@@ -473,7 +473,7 @@ def fig_paint_see(c: dict) -> None:
     )
     grouped_bars(
         axes[1],
-        ["G1", "SEE"],
+        ["Generate", "SEE"],
         [
             ("SFT", [s["sft_g1"], s["sft_see"]], C["sft"], HATCH["sft"]),
             ("GRPO", [s["grpo_g1"], s["grpo_see"]], C["grpo"], HATCH["grpo"]),
@@ -482,8 +482,8 @@ def fig_paint_see(c: dict) -> None:
         ylabel="",
         legend=False,
     )
-    axes[0].set_xlabel("Goal-red")
-    axes[1].set_xlabel("Far, перенос 8→16")
+    axes[0].set_xlabel("Красная цель")
+    axes[1].set_xlabel("Старты far, перенос 8→16")
     axes[1].tick_params(labelleft=False)
     handles = [
         Patch(facecolor=C["sft"], edgecolor="none", label="SFT"),
@@ -511,7 +511,7 @@ def fig_three_mdp(c: dict) -> None:
     fig, ax = plt.subplots(figsize=(W_WIDE, H))
     grouped_bars(
         ax,
-        ["C1  8→16", "Native 16×16", "Far-reset\n3 eval-seed"],
+        ["Перенос 8→16", "Обучение на 16×16\nтестовый набор 42", "Far-reset\nсреднее 3 тестовых наборов"],
         [
             ("SFT", [f["c1_far_sft"], f["native_far_sft"], f["farreset_far_sft_3seed"]], C["sft"], HATCH["sft"]),
             (

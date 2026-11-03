@@ -1,6 +1,6 @@
 # MiniGrid Navigation NanoVLM (SFT + GRPO)
 
-![Python](https://img.shields.io/badge/Python-3.10-blue?logo=python)
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)
 ![PyTorch](https://img.shields.io/badge/PyTorch-Deep%20Learning-red?logo=pytorch)
 ![Transformers](https://img.shields.io/badge/HuggingFace-Transformers-yellow?logo=huggingface)
 ![MiniGrid](https://img.shields.io/badge/MiniGrid-RL%20Environment-green)
@@ -9,24 +9,15 @@
 
 ## Описание проекта
 
-В проекте адаптируется vision-language модель NanoVLM для управления агентом в среде MiniGrid EmptyEnv. Агент получает частичное RGB-наблюдение 7x7 клеток и должен выбрать одно из трёх действий: `left`, `right` или `forward`.
+В проекте NanoVLM дообучается выбирать действие в MiniGrid Empty. Агент видит частичный эгоцентричный обзор 7×7 клеток в виде RGB-картинки и выбирает `left`, `right` или `forward`.
 
-Научный каталог экспериментов (линейки A/B, OOD, декодер, отвергнутые гипотезы): **[RESEARCH.md](RESEARCH.md)**. Таблицы ниже — линейка A (3 эпохи SFT); их нельзя смешивать с длинным SFT / handoff и с новым split-горизонтом.
+Сначала политика учится на траекториях BFS-эксперта (SFT), затем второй LoRA-адаптер дообучается методом GRPO по награде среды. Оба этапа описаны в разделе [«Стенд»](#стенд).
 
-Обучение проводится в два этапа:
+Знак Δ = GRPO − SFT зависит от теста. На Empty 8×8 с зелёной целью, где шло обучение, GRPO не ниже SFT. На переносе 8→16 и на красной цели GRPO ниже SFT: награду обучения можно получить без навыка, который нужен на этих тестах. Ни карты 16×16, ни красной цели в обучении нет; дальше эти тесты названы OOD (out-of-distribution), а обучающая карта — in-domain.
 
-1. **SFT (Supervised Fine-Tuning)** на экспертных траекториях, построенных BFS-планировщиком.
-2. **GRPO-style RL fine-tuning** для дообучения политики через взаимодействие со средой.
+Дальше разобраны три части результата: сам знак, два механизма провалов на OOD и эвристика, по которой ожидаемый знак читается из награды обучения.
 
-Основные среды:
-
-- `MiniGrid-Empty-8x8-v0` — базовая среда, где pipeline уже близок к потолку.
-- `MiniGrid-Empty-16x16-v0` — более сложная среда с длинными траекториями и большим числом состояний.
-
-Дополнительно проверяются два свойства политики:
-
-- перенос между размерами карты (`8x8 -> 16x16` и `16x16 -> 8x8`);
-- устойчивость к изменению цвета цели с зелёного на красный.
+Основные цифры сняты декодером `generate` на горизонтах **12** шагов для 8×8 и **40** для 16×16, по 250 эпизодов на каждом из трёх тестовых наборов (seed 42, 123, 456). SFT — эпоха 9 длинного обучения на 8×8; где используется другой SFT, это сказано явно.
 
 Общая схема pipeline:
 
@@ -34,47 +25,37 @@
 
 ## Оглавление
 
-1. [Данные и эксперт](#данные-и-эксперт)
-2. [Модель и обучение](#модель-и-обучение)
-3. [Результаты](#результаты)
-4. [Дополнительные эксперименты](#дополнительные-эксперименты)
-5. [Запуск проекта](#запуск-проекта)
-6. [Структура проекта](#структура-проекта)
-7. [Выводы и дальнейшая работа](#выводы-и-дальнейшая-работа)
-8. [Научный обзор](RESEARCH.md)
+1. [Стенд](#стенд)
+2. [Главный результат](#главный-результат)
+3. [Два механизма](#два-механизма)
+4. [Почему на переносе SFT выше](#почему-на-переносе-sft-выше)
+5. [Когда ожидать знак: эвристика](#когда-ожидать-знак-эвристика)
+6. [Ограничения](#ограничения)
+7. [Запуск](#запуск)
+8. [Короткий SFT (3 эпохи)](#короткий-sft-3-эпохи)
+9. [Литература](#литература)
 
-## Данные и эксперт
+## Стенд
 
-Экспертные траектории генерируются с помощью BFS (Breadth-First Search). Внутри BFS состояние включает координаты и направление агента `(x, y, agent_dir)`; `left` и `right` меняют ориентацию, позицию меняет только `forward`.
+По периметру стены, внутри пустые клетки, одна клетка — цель. Агент не видит полную карту. Эпизод успешен, когда агент встаёт на клетку цели. Награда MiniGrid равна `1 − 0.9 · t / max_steps`, где `t` — число потраченных шагов: короткий путь даёт больше.
 
-Для уменьшения искусственного дисбаланса поворотов генератор сравнивает left-first и right-first shortest paths и выбирает путь, который уменьшает накопленный дисбаланс между `left` и `right`.
+| Полный вид 8×8 | Вид агента |
+|---|---|
+| ![8x8 full view](docs/figures/8x8/global_image.png) | ![8x8 agent view](docs/figures/8x8/ego_image.png) |
 
-Каждый пример датасета содержит:
+Три типа старта, по которым разбирается success rate:
 
-- `ego_image` — частичное RGB-наблюдение агента;
-- `global_image` — полный вид среды;
-- текстовый промпт;
-- экспертное действие (`action`, `action_id`);
-- `episode_id`, `step`, `env_size`;
-- `agent_pos` — позиция агента `(x, y)` на сетке;
-- `agent_dir` — направление агента (`0`–`3`).
+| Старт | Что видит агент |
+|---|---|
+| `visible` | Цель уже в кадре |
+| `facing_miss` | Цели в кадре нет; один–три поворота на месте выводят её в кадр |
+| `far` | Цель не видна ни при одном из четырёх направлений на этой клетке. Чтобы её увидеть, нужно сменить позицию |
 
-SFT и GRPO используют только `ego_image`, `prompt` и `action`; поля `agent_pos` и `agent_dir` нужны для аудита траекторий и анализа датасета.
+На 8×8 доля `far` около 3% стартов (2.8%), на 16×16 — около 55%. Действия те же, доля дальних стартов другая.
 
-Датасеты:
+![Доля типов старта на двух картах](thesis/figures/fig2_start_prior.svg)
 
-| Environment | Path | Episodes | Rows | Action distribution |
-|---|---|---:|---:|---|
-| 8x8 | `datasets/dataset_8x8` | 1000 | 5280 | `forward=3914`, `left=686`, `right=680` |
-| 16x16 | `datasets/dataset_16x16` | 1000 | 10530 | `forward=9105`, `left=726`, `right=699` |
-
-## Модель и обучение
-
-В проекте используется NanoVLM v0.1:
-
-https://github.com/huggingface/nanoVLM/releases/tag/v0.1
-
-Формат входа:
+Модель — [NanoVLM v0.1](https://github.com/huggingface/nanoVLM/releases/tag/v0.1), около 222M параметров, дообучение LoRA. Формат входа:
 
 ```text
 User: <image>
@@ -82,345 +63,207 @@ User: <image>
 Assistant:
 ```
 
-Текст промпта:
+Промпт обучения просит дойти до зелёной клетки. Ответ — один токен с ведущим пробелом: ` left`, ` right` или ` forward`.
 
-```text
-You are a robot in a 2D grid world. You see a 7x7 partial RGB view in front of you.
-Your mission: get to the green goal square as quickly as possible.
-Choose the next action: forward, left or right.
-```
+Два этапа обучения:
 
-Целевой ответ (leading space — отдельный tokenizer id):
+1. **SFT.** Эксперт — BFS по полной позе (координаты, направление, положение цели). Политика этого состояния не видит. Обучение — кросс-энтропия по действию эксперта на текущем кадре.
+2. **GRPO.** Второй LoRA поверх SFT. С одной и той же раскладки разыгрывается группа из 16 эпизодов. Действия эпизодов с наградой выше среднего по группе становятся вероятнее, ниже среднего — менее вероятными. Если все 16 эпизодов закончились одинаково, преимущество у всех равно нулю, и от шага остаётся только член KL.
 
-```text
- left
- right
- forward
-```
+Розыгрыш эпизодов в GRPO и оценка в среде используют один декодер `generate`: модель семплирует один токен из полного словаря. SFT учится на действиях эксперта; семплирование появляется только в GRPO и на оценке. Токен вне трёх действий завершает эпизод. Для обновления GRPO из тех же логитов берутся только три токена действий. Клип PPO здесь шаг не меняет: на каждый розыгрыш делается одно обновление, dropout LoRA равен нулю, поэтому отношение новой и старой вероятности равно 1. По сути это REINFORCE с групповым baseline и KL-штрафом к SFT. На оценке GRPO загружается вместе с родительским SFT.
 
-В SFT prompt tokens маскируются, поэтому loss считается по assistant action, а не по воспроизведению всего промпта. Train/validation split выполняется на уровне эпизодов, чтобы шаги одного эпизода не попадали одновременно в train и validation.
-
-**Текущий стек обучения (bs32 / AdamW):**
-
-- оптимизатор: `torch.optim.AdamW` (и для SFT, и для GRPO);
-- SFT по умолчанию: `BATCH_SIZE=32`, `GRAD_ACCUM=1`;
-- GRPO: rollout = `generate_action()` (как eval); PPO/KL scoring — 3-way softmax по ` left` / ` right` / ` forward`; update батчится (`--update-batch-size`, default 32);
-- invalid action token в rollout/eval сразу завершает эпизод (без fallback на `forward`).
-
-Validation accuracy используется только как вспомогательная offline-метрика. Основная оценка проводится в среде через `success rate`, `average reward`, `timeouts`, `invalid_action_episodes` и среднюю длину успешной траектории. Для native suites предпочтительны **multi-seed** env eval (42 / 123 / 456); transfer и goal-color — seed 42.
-
-### Протокол environment evaluation
-
-Политика выбирает действие через `model.generate(..., max_new_tokens=1)`. Сгенерированный token id сопоставляется с ` left` / ` right` / ` forward`.
-
-- Если токен распознан — действие выполняется в MiniGrid.
-- Если токен не является одним из трёх action-токенов — эпизод завершается с ошибкой (`invalid_action_episodes`).
-
-Эпизод также может завершиться успехом (достижение цели) или timeout-ом (исчерпан лимит шагов).
-
-После SFT модель дообучается через GRPO-style RL loop. Политика инициализируется из SFT adapter, затем запускаются группы rollout-ов в MiniGrid. Для каждой группы считается group-relative advantage, после чего выполняется clipped update с KL-штрафом к reference SFT policy.
-
-Сравнение этапов SFT и GRPO:
+Сравнение этапов:
 
 ![Сравнение SFT и GRPO](docs/figures/architecture/sft_vs_grpo.png)
 
-## Результаты
+## Главный результат
 
-Environment evaluation: `generate`, 250 episodes, seeds **42 / 123 / 456**. Команды обучения и evaluation — в разделе [Запуск проекта](#запуск-проекта).
+Δ = GRPO − SFT в процентных пунктах. Положительное значение значит, что success rate GRPO выше, чем у SFT.
 
-Цифры этого раздела — **линейка A** (SFT 3 эпохи, bs32 / AdamW) на **старом unified horizon** (Empty 8×8 eval=12, Empty 16×16 eval=40). Канон главы, длинный SFT, OOD C1 и TTAug — в [RESEARCH.md](RESEARCH.md). 8×8 GRPO **97.73%** ниже — pick `episode-75`; в главе primary = `episode-100` (**97.20%**). Не складывать эти % с линейкой B (`*_bs32_e10`) и с DoorKey.
+В таблице SFT эпохи 9 и GRPO, обученный поверх него три раза с разным seed (42, 123, 456). GRPO — среднее трёх обучений, ± — стандартное отклонение Δ по ним.
 
-Headline checkpoint-ы:
+| Где меряем | SFT | GRPO | Δ |
+|---|---:|---:|---:|
+| Empty 8×8, зелёная цель (обучающая карта) | 97.87% | 98.27% | **+0.40** ± 0.23 |
+| Перенос: те же веса на карте 16×16 | 57.47% | 45.82% | **−11.64** ± 0.98 |
+| Красная цель на 8×8 | 17.87% | 3.20% | **−14.67** ± 0.96 |
 
-| Env | Best SFT | Best GRPO |
+Все три обучения дают отрицательный знак на обоих OOD-тестах. Механизмы ниже разобраны на одном из них (seed 42): перенос 45.07% (Δ −12.40), красная цель 2.40% (Δ −15.47).
+
+![Знак Δ на обучающей карте и двух OOD-тестах](thesis/figures/fig1_sign_flip.svg)
+
+Слева — Δ по эпохам SFT для обучения GRPO seed 42. В клетке обучающей карты у эпохи 9 стоит среднее трёх обучений, отсюда звёздочка `e9*`. Справа — оба OOD-теста для каждого из трёх обучений. Усы — стандартное отклонение по трём тестовым наборам.
+
+Отрицательный знак на OOD есть уже после первой эпохи SFT, когда прирост GRPO на обучающей карте максимален: **+14.1** п.п. на обучающей карте, **−8.3** на переносе и **−21.3** на красной цели.
+
+Из измеренных эпох SFT (1, 5 и 9) лучшая на обоих OOD-тестах — пятая: перенос 59.87% против 57.47% у эпохи 9, красная цель 40.27% против 17.87%. Больше половины падения SFT на красной цели (−13.3 из −22.4 п.п.) приходится на старты, где красная клетка уже в кадре: успех на них 48.64% → 21.32% (в среднем 122 таких старта из 250).
+
+Вывод: GRPO усиливает поведение, которым на обучении уже берётся награда. На 8×8 это движение к зелёной клетке и поворот на пустом кадре. Навык, нужный на большой карте и при другом цвете цели, в эту награду почти не входит.
+
+## Два механизма
+
+### Перенос: политика реже начинает поиск
+
+Здесь и в следующем подразделе — обучение GRPO seed 42. Почти вся разница сосредоточена на стартах `far`. Поворот на месте есть у обеих политик.
+
+| Старт на переносе 8→16 | SFT | GRPO |
+|---|---:|---:|
+| `visible` | 99.42% | 95.88% |
+| `facing_miss` | 95.22% | 95.82% |
+| `far` | **25.81%** | **4.61%** |
+
+![Успех по типам старта на переносе](thesis/figures/fig3_transfer_strata.svg)
+
+Среди неуспешных эпизодов с пустым стартовым кадром GRPO в 71–81% случаев только поворачивается и ни разу не сходит с клетки. У SFT таких эпизодов 20–26% (диапазон по тестовым наборам).
+
+Проверка SEE. Оракул доводит агента до позы, где цель уже в кадре, дальше действует обычный `generate`. На `far` GRPO поднимается с **4.61%** до **87.54%**. Значит, к видимой цели GRPO идёт, а ломается именно поиск. Восстановление неполное: под тем же оракулом SFT даёт 95.09%. На двух других обучениях GRPO картина та же: 5.51% → 93.74% и 4.62% → 77.01%.
+
+![SEE и PAINT](thesis/figures/fig4_paint_see.svg)
+
+На рисунке столбец Generate — обычная оценка, без оракула SEE и без перекраски PAINT.
+
+Почему поиск почти не попадает в обновление. Каждый шаг GRPO — одна группа из 16 эпизодов с одной раскладки; в трёх обучениях эпохи 9 вместе 300 групп. Старты `far` встретились в них **12 раз**. В 10 группах из 12 исходы внутри группы различались, и обновление ненулевое; в двух оно нулевое. Главное здесь — редкость таких групп, а не нулевые обновления.
+
+Если обучать сразу на 16×16, где `far` — больше половины стартов, падения до 4.61% нет. Здесь другой SFT — обученный на 16×16, эпоха 8 того же длинного обучения, — и три обучения GRPO поверх него. В таблице успех на стартах `far`; GRPO — среднее трёх обучений, Δ и парный 95% интервал посчитаны на одних и тех же стартах.
+
+| Тестовый набор | Far SFT | Far GRPO | Δ | 95% интервал Δ |
+|---|---:|---:|---:|---|
+| 42 | 81.69% | 73.71% | **−7.98** | [−15.26; −0.47] |
+| 123 | 79.86% | 77.55% | **−2.31** | [−9.03; 4.63] |
+| 456 | 69.47% | 72.26% | **+2.80** | [−5.60; 11.45] |
+
+Знак здесь неустойчив: на наборе 42 GRPO ниже SFT и интервал целиком ниже нуля, на наборах 123 и 456 интервал накрывает ноль. Три Δ не усредняются.
+
+![Успех на дальних стартах при трёх условиях обучения](thesis/figures/fig5_far_three_mdp.svg)
+
+Три группы на рисунке — успех только на стартах `far`.
+
+- **Перенос 8→16:** обучение на 8×8, проверка на 16×16 (SFT 25.81%, GRPO 4.61%).
+- **Обучение на 16×16:** тестовый набор 42, GRPO — среднее трёх обучений (73.71% против 81.69% у SFT).
+- **Far-reset:** одно обучение GRPO (seed 42) на 16×16, где каждый эпизод начинался с дальнего старта. Столбцы — среднее по трём тестовым наборам: GRPO 77.94%, SFT 77.01%, то есть на уровне SFT. 77.01% — тот же SFT 16×16, усреднённый по трём наборам; из 73.71% его вычитать нельзя, это клетки разных наборов.
+
+Вывод: на переносе GRPO ослабляет поиск, потому что на 8×8 поиск почти не нужен для награды. Когда дальние старты есть в обучении, провала до 4.61% нет, но и устойчивого выигрыша GRPO над SFT тоже нет.
+
+### Красная цель: награда совпадает с зелёными пикселями
+
+На обучении цель всегда зелёная. Достижение цели и касание зелёной клетки дают одну и ту же награду.
+
+Проверка PAINT: те же красные раскладки, в тексте по-прежнему «red», но в наблюдении агента клетка цели перекрашена в зелёный; среда и награда прежние. GRPO поднимается с **2.40%** до **97.73%**, SFT — с 17.87% до 96.80%. На двух других обучениях GRPO: 97.60% и 98.13%. Отдельный прогон с красной картинкой и зелёным текстом даёт 3.33% против 2.40% при красном тексте. Shortcut — цвет пикселя, а не формулировка миссии.
+
+Одно обучение GRPO, в котором красная цель смешана с зелёной, поднимает успех на красном тесте до **54.40%** (против 2.40%). На зелёной обучающей карте успех при этом падает до **94.40%**, ниже SFT (97.87%). Распределение обучения на результат влияет, но до уровня зелёной цели политика не доходит.
+
+Вывод: в этой постановке цвет клетки и есть цель. У Chu et al. [1] цвет карт на награду не влияет, и там RL обобщает лучше SFT (таблица ниже). Здесь цвет входит в награду, и GRPO обобщает хуже.
+
+## Почему на переносе SFT выше
+
+Эксперт видит скрытую цель. На 8×8 почти все пустые кадры относятся к `facing_miss`: цель рядом, и эксперт поворачивается. На редких дальних кадрах он идёт вперёд, и пошаговый SFT сохраняет часть этого поведения. GRPO оценивает успех всего эпизода при случайном старте: редкий шаг вперёд почти не повышает награду, и политика чаще выбирает поворот.
+
+На 16×16 большая часть пустых кадров — `far`, и эксперт на них чаще делает `forward`. SFT, обученный сразу на 16×16, видит это действие с начала обучения. Перенос с 8×8 этого распределения не получает.
+
+Ту же развилку можно проверить без VLM, на двух фиксированных политиках. Когда цель в кадре, обе идут к ней кратчайшим путём. На пустом кадре одна всегда поворачивается (`left`), другая делает шаг вперёд (`forward`).
+
+| Карта | Поворот | Шаг вперёд |
+|---|---:|---:|
+| 8×8 | ~98% | ~71% |
+| 16×16 | ~44% | ~64% |
+
+![Две фиксированные политики без VLM](thesis/figures/fig8_memoryless_bayes.svg)
+
+На обеих картах 95% интервалы этих политик по трём тестовым наборам не пересекаются, а лучшая политика на двух картах разная. Успех GRPO на переносе (~45%) близок к политике поворота на 16×16 (~44%), но это не одна и та же политика. По типам старта поворот даёт 100% / 100% / 0%, GRPO — 95.88% / 95.82% / 4.61% (`visible` / `facing_miss` / `far`). Суммы совпадают за счёт компенсации: GRPO примерно на 4 п.п. хуже поворота на первых двух типах и на 4.6 п.п. лучше на `far`. Красную цель этот расчёт не объясняет: для неё нужна проверка PAINT.
+
+Вывод: остаток SFT на переносе согласуется с тем, что SFT учился пошагово на траекториях эксперта, который видит скрытую цель.
+
+## Когда ожидать знак: эвристика
+
+Если награду обучения нельзя стабильно получить без навыка, который проверяет тест, этот навык входит в награду, и ожидаем GRPO не ниже SFT; величину эвристика не даёт. Если награду можно взять без этого навыка, GRPO закрепляет более лёгкий способ. Тогда на тесте, где лёгкого способа нет, GRPO оказывается ниже SFT, у которого ещё остались действия эксперта.
+
+Это эвристика, а не теорема: она проверена на случаях из таблицы ниже, и последний из них совпадает с ней лишь частично.
+
+На этом стенде лёгкий способ есть. На 8×8 награда берётся поворотом к зелёной клетке: поиск на большой карте и красная цель для неё не нужны. Когда дальние старты сами входят в обучение, как на 16×16, провала до 4.61% нет. Так читается ожидаемый знак. Проценты успеха из этого чтения не выводятся.
+
+| Работа | Можно ли получить награду обучения без того, что проверяет тест? | Что выходит |
 |---|---|---|
-| 8x8 | `checkpoints/sft_adapter_8x8_bs32/epoch-3` | `checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75` |
-| 16x16 | `checkpoints/sft_adapter_16x16_bs32/epoch-3` | `checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100` |
+| Chu et al. [1], карты другого цвета; награда — собрать 24 | Нет. Цвет на награду не влияет | RL выше SFT |
+| Lu et al. [2], картинки другого стиля (ImageNet-R) | Нет. Награда — верный класс | RL выше SFT |
+| Visionary-R1 [3], сложные вопросы с картинкой | Да. На лёгких вопросах хватает текста | GRPO обходится без картинки |
+| Эта работа, красная цель | Да. Хватает зелёной клетки | GRPO ниже SFT |
+| Эта работа, поиск при переносе 8→16 | Да. На 8×8 хватает поворота | GRPO ниже SFT |
+| Эта работа, дальние старты при обучении на 16×16 | Нет. Такие старты в обучении есть | Провала нет, но знак неустойчив: −7.98 / −2.31 / +2.80 по трём наборам |
 
-### Среда 8x8
+## Ограничения
 
-На `MiniGrid-Empty-8x8-v0` SFT уже даёт высокое качество, а GRPO дополнительно уменьшает число timeout-ов.
+- Одна базовая модель (NanoVLM, 222M) и одно семейство сред (MiniGrid Empty).
+- Три обучения GRPO на каждую конфигурацию, а far-reset и смешанный цвет обучены по одному разу.
+- SEE и PAINT — диагностика механизма, а не методы улучшения.
+- Эвристика про знак проверена на нескольких случаях и не доказана.
+- Цифры сняты на горизонтах 12 и 40. В текущем коде горизонты по умолчанию другие (16 и 38), поэтому в командах ниже они передаются явно.
 
-Полный вид среды и частичное наблюдение агента:
+## Запуск
 
-| Full view | Agent view |
-|---|---|
-| ![8x8 full view](docs/figures/8x8/global_image.png) | ![8x8 agent view](docs/figures/8x8/ego_image.png) |
+1. Клонируйте репозиторий и установите зависимости: `pip install -r requirements.txt`. Нужен Python 3.11 или новее; PyTorch ставится в сборке CUDA 13.2 с индекса, указанного в файле.
+2. Скачайте [NanoVLM v0.1](https://github.com/huggingface/nanoVLM/releases/tag/v0.1) и положите папку в корень под именем `nanoVLM`. Веса базовой модели скачиваются с Hugging Face Hub при первом запуске.
+3. Если `wandb` не нужен, добавьте `--no-wandb` к командам обучения.
 
-Графики обучения:
-
-| SFT train loss | SFT validation accuracy |
-|---|---|
-| ![SFT 8x8 train loss](docs/figures/8x8/sft_8x8_loss.png) | ![SFT 8x8 validation accuracy](docs/figures/8x8/sft_8x8_val_accuracy.png) |
-
-| GRPO loss | GRPO success rate |
-|---|---|
-| ![GRPO 8x8 loss](docs/figures/8x8/grpo_8x8_loss.png) | ![GRPO 8x8 success rate](docs/figures/8x8/grpo_8x8_success_rate.png) |
-
-SFT 8x8 обучается стабильно: train loss быстро падает почти до нуля, а validation accuracy растёт. GRPO 8x8 имеет высокий success rate почти на всём протяжении обучения; отдельные провалы связаны с тем, что метрика считается на небольших группах rollout-ов и чувствительна к конкретным seed-ам.
-
-Статистика split-а:
-
-- train rows: `4735`, validation rows: `545`;
-- majority action: `forward`;
-- majority validation accuracy: `0.7413`;
-- train action distribution: `left=615`, `right=610`, `forward=3510`;
-- validation action distribution: `left=71`, `right=70`, `forward=404`.
-
-Результаты тестирования (seed 42):
-
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
-|---|---:|---:|---:|---:|---:|---|
-| Majority-forward | 5.2% | 0.052 | 2.2 | 237/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
-| Base NanoVLM | 0.8% | 0.008 | 1.5 | 0/250 | 248/250 | L:51.0% / R:12.1% / F:36.9% |
-| SFT epoch-3 | 91.6% | 0.898 | 5.6 | 17/250 | 4/250 | L:17.0% / R:11.9% / F:71.1% |
-| GRPO episode-75 | 98.0% | 0.961 | 5.4 | 3/250 | 2/250 | L:19.2% / R:11.6% / F:69.2% |
-| Expert BFS | 100.0% | 0.982 | 5.2 | 0/250 | 0/250 | L:13.4% / R:13.4% / F:73.2% |
-
-Success rate по seed (native 8x8, только SFT / GRPO):
-
-| seed | SFT epoch-3 | GRPO episode-75 | Δ (GRPO − SFT) |
-|---:|---:|---:|---:|
-| 42 | 91.6% | 98.0% | +6.4 |
-| 123 | 93.6% | 98.0% | +4.4 |
-| 456 | 95.2% | 97.2% | +2.0 |
-| **mean** | **93.47%** | **97.73%** | **+4.26** |
-
-Вывод: чистая NanoVLM без дообучения почти не решает задачу (`0.8%`, `248/250` invalid actions на seed 42). SFT поднимает mean success до `93.47%`. GRPO даёт mean `97.73%` (+4.26 п.п. к SFT). Лучший GRPO checkpoint — `episode-75`, не финальный `episode-100`.
-
-### Среда 16x16
-
-`MiniGrid-Empty-16x16-v0` сложнее из-за более длинных траекторий. Ошибки действий накапливаются сильнее, поэтому высокая offline accuracy хуже отражает реальное качество политики.
-
-Полный вид среды и частичное наблюдение агента:
-
-| Full view | Agent view |
-|---|---|
-| ![16x16 full view](docs/figures/16x16/global_image.png) | ![16x16 agent view](docs/figures/16x16/ego_image.png) |
-
-Графики обучения:
-
-| SFT train loss | SFT validation accuracy |
-|---|---|
-| ![SFT 16x16 train loss](docs/figures/16x16/sft_16x16_loss.png) | ![SFT 16x16 validation accuracy](docs/figures/16x16/sft_16x16_val_accuracy.png) |
-
-| GRPO loss | GRPO success rate |
-|---|---|
-| ![GRPO 16x16 loss](docs/figures/16x16/grpo_16x16_loss.png) | ![GRPO 16x16 success rate](docs/figures/16x16/grpo_16x16_success_rate.png) |
-
-Для SFT 16x16 validation accuracy растёт, но train loss заметно шумит. GRPO 16x16 также нестабилен: success rate сильно колеблется. Это ожидаемо для более длинной среды с более разреженным reward.
-
-Статистика split-а:
-
-- train rows: `10427`, validation rows: `103`;
-- majority action: `forward`;
-- majority validation accuracy: `0.8641`;
-- train action distribution: `left=719`, `right=692`, `forward=9016`;
-- validation action distribution: `left=7`, `right=7`, `forward=89`.
-
-Результаты тестирования (seed 42):
-
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
-|---|---:|---:|---:|---:|---:|---|
-| Majority-forward | 3.2% | 0.032 | 4.1 | 242/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
-| Base NanoVLM | 0.4% | 0.004 | 1.0 | 0/250 | 249/250 | L:48.9% / R:11.1% / F:40.0% |
-| SFT epoch-3 | 77.6% | 0.764 | 17.3 | 44/250 | 12/250 | L:11.2% / R:6.4% / F:82.5% |
-| GRPO episode-100 | 84.0% | 0.828 | 16.9 | 33/250 | 7/250 | L:12.6% / R:9.0% / F:78.4% |
-| Expert BFS | 100.0% | 0.991 | 10.6 | 0/250 | 0/250 | L:6.8% / R:6.9% / F:86.3% |
-
-Success rate по seed (native 16x16, только SFT / GRPO):
-
-| seed | SFT epoch-3 | GRPO episode-100 | Δ (GRPO − SFT) |
-|---:|---:|---:|---:|
-| 42 | 77.6% | 84.0% | +6.4 |
-| 123 | 75.2% | 81.2% | +6.0 |
-| 456 | 81.6% | 84.8% | +3.2 |
-| **mean** | **78.13%** | **83.33%** | **+5.20** |
-
-Вывод: на 16x16 метрики зависят от seed (SFT: `75.2–81.6%`). GRPO даёт mean `83.33%` (+5.20 п.п. к SFT). Лучший checkpoint — `episode-100`. Параметры GRPO (`lr=5e-6`, `epsilon=0.1`, `beta=0.1`, `lora_dropout=0.0`) совпадают с 8x8 для сравнения стека; их нельзя автоматически считать оптимальными для каждой среды.
-
-## Дополнительные эксперименты
-
-### Перенос между средами
-
-Проверялось, насколько политика, обученная на одном размере среды, переносится на другой. В этих экспериментах `dataset-path` соответствует тестовой среде, а adapter path — среде, на которой модель была обучена.
-
-#### 8x8 -> 16x16
-
-seed 42, 250 episodes. Adapters: SFT/GRPO, обученные на 8x8 (`epoch-3` / `episode-75`).
-
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
-|---|---:|---:|---:|---:|---:|---|
-| Majority-forward | 3.2% | 0.032 | 4.1 | 242/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
-| SFT trained on 8x8 | 56.4% | 0.558 | 11.6 | 97/250 | 12/250 | L:42.9% / R:17.6% / F:39.5% |
-| GRPO trained on 8x8 | 44.8% | 0.444 | 9.3 | 132/250 | 6/250 | L:66.8% / R:18.1% / F:15.1% |
-| Expert BFS | 100.0% | 0.991 | 10.6 | 0/250 | 0/250 | L:6.8% / R:6.9% / F:86.3% |
-
-SFT, обученная на 8x8, частично переносится на 16x16 и достигает `56.4%` success rate, что значительно выше majority baseline, но ниже результата SFT, обученной непосредственно на 16x16 (mean `78.13%`). GRPO, обученная на 8x8, переносится хуже SFT (`44.8%` против `56.4%`) и сильно смещается в сторону поворотов: доля `forward` падает до `15.1%`.
-
-#### 16x16 -> 8x8
-
-seed 42, 250 episodes. Adapters: SFT/GRPO, обученные на 16x16 (`epoch-3` / `episode-100`).
-
-| Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
-|---|---:|---:|---:|---:|---:|---|
-| Majority-forward | 5.2% | 0.052 | 2.2 | 237/250 | 0/250 | L:0.0% / R:0.0% / F:100.0% |
-| SFT trained on 16x16 | 94.0% | 0.920 | 5.9 | 11/250 | 4/250 | L:16.8% / R:12.5% / F:70.7% |
-| GRPO trained on 16x16 | 96.0% | 0.940 | 5.8 | 6/250 | 4/250 | L:17.0% / R:12.5% / F:70.5% |
-| Expert BFS | 100.0% | 0.982 | 5.2 | 0/250 | 0/250 | L:13.4% / R:13.4% / F:73.2% |
-
-Модели, обученные на 16x16, хорошо переносятся на 8x8. SFT достигает `94.0%`, а GRPO повышает результат до `96.0%`.
-
-Сводная таблица (native — mean по 3 seed; transfer — seed 42):
-
-| Train env | Test env | SFT success | GRPO success | Вывод |
-|---|---|---:|---:|---|
-| 8x8 | 8x8 | 93.47% | 97.73% | среда простая, GRPO даёт стабильный прирост |
-| 8x8 | 16x16 | 56.4% | 44.8% | перенос есть, но GRPO ухудшает (seed 42) |
-| 16x16 | 16x16 | 78.13% | 83.33% | сложная среда, прирост GRPO заметный |
-| 16x16 | 8x8 | 94.0% | 96.0% | перенос сильный, GRPO помогает (seed 42) |
-
-Transfer и goal-color — только seed 42, линейка A. Multi-seed OOD на длинном SFT (C1: GRPO **вредит** transfer 8→16 и goal-red) — [RESEARCH.md](RESEARCH.md) §8.
-
-Вывод: перенос асимметричен. Обучение на 16x16 даёт политику, которая хорошо переносится на более короткую 8x8 среду, а GRPO дополнительно улучшает этот перенос. Обратное направление слабее: модели, обученные на 8x8, хуже работают на 16x16, а GRPO-донастройка под короткий горизонт дополнительно ухудшает перенос.
-
-### Изменение цвета цели
-
-seed 42, 250 episodes. Adapters: 8x8 SFT/GRPO (`epoch-3` / `episode-75`). Команды — в [Запуск проекта](#запуск-проекта).
-
-Дополнительно проверялась устойчивость политики к изменению цвета цели: модели, обученные на зелёной цели, тестировались на красной. Это показывает, выучила ли модель обобщённое поведение навигации к цели или опирается на конкретный цветовой паттерн.
-
-Два параметра задаются независимо:
-
-- `--goal-color` - фактический цвет цели в MiniGrid;
-- `--prompt-goal-color` - цвет цели, указанный в промпте модели.
-
-| Visual goal color | Prompt color | Policy | Success Rate | Avg Reward | Avg Steps (Win) | Timeouts | Invalid actions | Action distribution |
-|---|---|---|---:|---:|---:|---:|---:|---|
-| green | green | SFT | 91.6% | 0.898 | 5.6 | 17/250 | 4/250 | L:17.0% / R:11.9% / F:71.1% |
-| green | green | GRPO | 98.0% | 0.961 | 5.4 | 3/250 | 2/250 | L:19.2% / R:11.6% / F:69.2% |
-| red | red | SFT | 40.4% | 0.394 | 7.4 | 143/250 | 6/250 | L:38.0% / R:22.3% / F:39.8% |
-| red | red | GRPO | 8.0% | 0.078 | 7.2 | 220/250 | 10/250 | L:54.6% / R:28.8% / F:16.6% |
-| red | green | SFT | 44.8% | 0.437 | 6.7 | 134/250 | 4/250 | L:32.0% / R:21.4% / F:46.6% |
-| red | green | GRPO | 9.6% | 0.094 | 7.2 | 221/250 | 5/250 | L:52.7% / R:28.7% / F:18.7% |
-
-Вывод: SFT частично переносит навигацию на красную цель, но качество всё равно падает с `91.6%` до `40.4–44.8%`. GRPO резко теряет устойчивость: несмотря на `98.0%` в green/green, на красной цели результат падает до `8.0–9.6%`, а доля поворотов растёт. Модель в значительной степени опирается на визуальный паттерн зелёной клетки, а не на абстрактное понятие цели. Тот же знак на линейке B, три eval seed: [RESEARCH.md](RESEARCH.md) §8 (`HURTS_REPLICATED`).
-
-## Запуск проекта
-
-### Установка
-
-1. Клонируйте репозиторий.
-2. Установите зависимости:
-
-```powershell
-pip install -r requirements.txt
-```
-
-3. Скачайте [NanoVLM](https://github.com/huggingface/nanoVLM/releases/tag/v0.1) и поместите папку в корень проекта под именем `nanoVLM`.
-
-Если `wandb` недоступен или не нужен, добавьте `--no-wandb` к командам обучения.
-
-### Датасеты
+Датасеты эксперта:
 
 ```powershell
 python scripts/dataset_generation.py --env-size 8 --save-path datasets/dataset_8x8
 python scripts/dataset_generation.py --env-size 16 --save-path datasets/dataset_16x16
 ```
 
-### Обучение и evaluation: 8x8
+Обучение SFT на 10 эпох и GRPO поверх эпохи 9. У `grpo.py` значения по умолчанию для `--lr`, `--epsilon`, `--beta` и `--lora-dropout` отличаются от тех, на которых сняты цифры, поэтому они переданы явно. Существующие каталоги в `checkpoints/` не перезаписывать: каждое новое обучение — в новый `--output-dir`.
 
 ```powershell
-python scripts/sft.py --env-size 8 --dataset-path datasets/dataset_8x8 --output-dir checkpoints/sft_adapter_8x8_bs32 --epochs 3
-
-python scripts/grpo.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --output-dir checkpoints/grpo_adapter_8x8_from_bs32_sft3 --lr 5e-6 --epsilon 0.1 --beta 0.1 --lora-dropout 0.0
-
-python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250
+python scripts/sft.py --env-size 8 --dataset-path datasets/dataset_8x8 --output-dir checkpoints/sft_adapter_8x8_bs32_e10 --epochs 10 --early-stop-patience 2
+python scripts/grpo.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32_e10/epoch-9 --output-dir checkpoints/grpo_adapter_8x8_handoff_from_e10_e9 --lr 5e-6 --epsilon 0.1 --beta 0.1 --lora-dropout 0.0 --episodes 100 --seed 42
 ```
 
-### Обучение и evaluation: 16x16
+Оценка одного обучения на одном тестовом наборе: 250 эпизодов, `--seed 42`. Горизонт передаётся явно: **12** на 8×8 и **40** на переносе. Без `--max-steps` код возьмёт 16 и 38, и проценты не будут сравнимы с таблицами выше. Числа в таблицах — среднее трёх тестовых наборов (seed 42, 123 и 456), а для GRPO ещё и среднее трёх обучений.
 
 ```powershell
-python scripts/sft.py --env-size 16 --dataset-path datasets/dataset_16x16 --output-dir checkpoints/sft_adapter_16x16_bs32 --epochs 3 --val-split 0.01
+# Empty 8×8, зелёная цель
+python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32_e10/epoch-9 --grpo-adapter-path checkpoints/grpo_adapter_8x8_handoff_from_e10_e9/episode-100 --episodes 250 --seed 42 --max-steps 12
 
-python scripts/grpo.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --output-dir checkpoints/grpo_adapter_16x16_from_bs32_sft3 --max-steps 35 --val-split 0.01 --lr 5e-6 --epsilon 0.1 --beta 0.1 --lora-dropout 0.0
+# Те же веса 8×8 на карте 16×16
+python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32_e10/epoch-9 --grpo-adapter-path checkpoints/grpo_adapter_8x8_handoff_from_e10_e9/episode-100 --episodes 250 --seed 42 --max-steps 40
 
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --max-steps 40 --val-split 0.01
+# Те же веса, красная цель
+python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32_e10/epoch-9 --grpo-adapter-path checkpoints/grpo_adapter_8x8_handoff_from_e10_e9/episode-100 --episodes 250 --seed 42 --max-steps 12 --goal-color red --prompt-goal-color red
 ```
 
-### Transfer
+Повторное обучение даст близкие, но не побитово совпадающие числа: розыгрыш семплирует на GPU, а часть исторических запусков шла на более ранней версии кода. Обучения far-reset и со смешанным цветом цели в этой ветке не воспроизводятся: флагов для них в `scripts/grpo.py` нет.
 
-`dataset-path` / `--env-size` — тестовая среда; adapters — среда обучения.
-
-```powershell
-# 8x8 -> 16x16
-python scripts/test_models.py --env-size 16 --dataset-path datasets/dataset_16x16 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250 --max-steps 40 --val-split 0.01
-
-# 16x16 -> 8x8
-python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_16x16_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100 --episodes 250 --max-steps 12 --val-split 0.1
-```
-
-### Goal-color (8x8)
-
-```powershell
-python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250 --goal-color red --prompt-goal-color red
-
-python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 --sft-adapter-path checkpoints/sft_adapter_8x8_bs32/epoch-3 --grpo-adapter-path checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75 --episodes 250 --goal-color red --prompt-goal-color green
-```
-
-## Структура проекта
+Флаги скриптов: `python scripts/<name>.py --help`.
 
 ```text
 vlm-minigrid-rl/
-├── checkpoints/
-│   ├── sft_adapter_8x8_bs32/              # SFT LoRA adapter для 8x8 (bs32, headline)
-│   ├── grpo_adapter_8x8_from_bs32_sft3/   # GRPO LoRA для 8x8 (headline: episode-75)
-│   ├── sft_adapter_16x16_bs32/            # SFT LoRA adapter для 16x16 (bs32, headline)
-│   ├── grpo_adapter_16x16_from_bs32_sft3/ # GRPO LoRA для 16x16 (headline: episode-100)
-│   ├── sft_adapter_8x8/                   # historical SFT 8x8
-│   ├── grpo_adapter_8x8/                  # historical GRPO LoRA (pre-generate protocol)
-│   ├── grpo_adapter_8x8_generate/         # historical generate GRPO 8x8
-│   ├── sft_adapter_16x16/                 # historical SFT 16x16
-│   ├── grpo_adapter_16x16/                # historical GRPO LoRA (pre-generate protocol)
-│   └── grpo_adapter_16x16_generate/       # historical generate GRPO 16x16
-├── datasets/
-│   ├── dataset_8x8/              # экспертный датасет для 8x8
-│   └── dataset_16x16/            # экспертный датасет для 16x16
-├── docs/
-│   └── figures/                  # графики обучения и примеры изображений среды
-├── nanoVLM/                      # репозиторий NanoVLM
-├── notebooks/
-│   └── quick_test.ipynb          # offline check SFT/GRPO vs expert
-├── RESEARCH.md                   # канон экспериментов (линейки, OOD, отвергнутые гипотезы)
-├── scripts/
-│   ├── _bootstrap.py             # настройка import paths для scripts/
-│   ├── dataset_generation.py     # генерация экспертных траекторий
-│   ├── sft.py                    # supervised fine-tuning
-│   ├── grpo.py                   # RL fine-tuning
-│   ├── run_tests.py              # orchestration eval suites + multi-seed compare
-│   └── test_models.py            # тестирование и оценка моделей
-├── src/
-│   └── vlm_minigrid_rl/
-│       ├── experiment_config.py  # пути и defaults экспериментов
-│       ├── minigrid_utils.py     # MiniGrid reset, BFS expert, environment metrics
-│       ├── model_utils.py        # NanoVLM loading, preprocessing, inference, scoring
-│       ├── paths.py              # project paths и NanoVLM path setup
-│       └── training_utils.py     # seed, split, baselines, action parsing
-├── README.md
-└── requirements.txt
+├── checkpoints/          # в репозитории: sft_adapter_8x8, grpo_adapter_8x8 и пара 16×16
+├── datasets/             # экспертные датасеты 8x8 и 16x16
+├── docs/figures/         # виды среды и схема pipeline
+├── notebooks/            # ноутбук для ручной проверки
+├── scripts/              # обучение, оценка и измерения
+├── src/vlm_minigrid_rl/  # библиотека Empty и измерения
+├── tests/                # юнит-тесты
+├── thesis/               # рисунки, данные к ним и сверка цифр
+├── nanoVLM/              # внешний чекаут NanoVLM
+├── RESEARCH.md           # протокол замеров и пути к чекпойнтам
+├── requirements.txt
+└── README.md
 ```
 
-## Выводы и дальнейшая работа
+## Короткий SFT (3 эпохи)
 
-Полный каталог, вердикты и что нельзя смешивать — **[RESEARCH.md](RESEARCH.md)**. Кратко:
+Ниже другой замер: SFT на 3 эпохи. Оценка шла на 12 шагах для 8×8 и на 40 для 16×16. При обучении GRPO `max_steps` среды не закреплялся, поэтому шкала награды отличалась от нынешнего кода. GRPO — одно обучение, проценты — среднее по трём тестовым наборам.
 
-- Pipeline работает: BFS-эксперт → SFT LoRA → GRPO LoRA, eval = `generate`.
-- Линейка A (этот README): 8×8 SFT **93.47%**, GRPO **97.73% @ep75** (+4.26 п.п.; в главе ep100 = **97.20%**); 16×16 SFT **78.13%**, GRPO **83.33%** (+5.20 п.п., один GRPO train seed).
-- После длинного SFT in-domain GRPO почти исчезает в сырых пунктах (8×8 e9 Δ **+0.40±0.23** pp; 16×16 e8 Δ **−0.80** pp). GRPO полезен, когда у SFT ещё большой headroom.
-- In-domain выигрыш **не** переносится на OOD: на тех же 8×8 e9 адаптерах GRPO хуже SFT на transfer 8→16 (**−12.40±4.80** pp) и goal-red (**−15.47±1.97** pp), три eval seed (`HURTS_REPLICATED`).
-- Фотометрический TTAug (среднее 3-way softmax по K=8 видамм) C1 **не чинит** (`HURTS_MORE`); 3-way декодер схлопывается в `right`, тогда как `generate` живой.
-- Декодер — ось результата: на 16×16 greedy SFT e5 = **92.40%**, поэтому плато ~83% под `generate` — не потолок среды. Base-anchored LoRA на late SFT — **NEGATIVE**.
+| Среда | SFT, 3 эпохи | GRPO | Δ |
+|---|---:|---:|---:|
+| Empty 8×8 | 93.47% | 97.73% (`episode-75`) | +4.26 |
+| Empty 16×16 | 78.13% | 83.33% (`episode-100`) | +5.20 |
 
-Empty in-domain как глава **заморожен**. Следующие шаги — только если они меняют утверждение из RESEARCH.md §12 (механизм C1 / зазор generate vs 3-way), а не ещё один in-domain sweep.
+Вывод этого замера: пока у SFT остаётся запас по success rate, GRPO на родной карте добавляет несколько пунктов. После длинного SFT этот прирост на 8×8 составляет **+0.40** п.п., и основным результатом становится знак на двух тестах вне обучения.
 
-Список 2026-07 (mixed-size curriculum, prompt engineering, CoT, VLA-голова) **снят** с роли плана: это не закрывает C1 и не следует из отвергнутых гипотез.
+## Литература
+
+1. Chu T. et al. SFT Memorizes, RL Generalizes: A Comparative Study of Foundation Model Post-training. [arXiv:2501.17161](https://arxiv.org/abs/2501.17161), 2025.
+2. Lu A. et al. Why Does RL Generalize Better Than SFT? A Data-Centric Perspective on VLM Post-Training. [arXiv:2602.10815](https://arxiv.org/abs/2602.10815), 2026.
+3. Xia J. et al. Visionary-R1: Mitigating Shortcuts in Visual Reasoning with Reinforcement Learning. [arXiv:2505.14677](https://arxiv.org/abs/2505.14677), 2025.
