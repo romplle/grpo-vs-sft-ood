@@ -41,6 +41,8 @@ NanoVLM v0.1 (~222M) + LoRA. MiniGrid Empty, частичный RGB-обзор 7
 |---|---|
 | SFT 8×8, эпоха 9 | `checkpoints/sft_adapter_8x8_bs32_e10/epoch-9` |
 | GRPO поверх него, три обучения | `checkpoints/grpo_adapter_8x8_handoff_from_e10_e9/episode-100` (+ `_seed123`, `_seed456`) |
+| SFT 8×8, эпохи 1 и 5 | `checkpoints/sft_adapter_8x8_bs32_e10/epoch-{1,5}` |
+| GRPO поверх эпох 1 и 5 | `checkpoints/grpo_adapter_8x8_handoff_from_e10_e{1,5}/episode-100` (+ `_seed123`, `_seed456`) |
 | SFT 16×16, эпоха 8 | `checkpoints/sft_adapter_16x16_bs32_e10/epoch-8` |
 | GRPO поверх него, три обучения | `checkpoints/grpo_adapter_16x16_handoff_from_e10_e8/episode-100` (+ `_seed123`, `_seed456`) |
 | Far-reset GRPO 16×16 | `checkpoints/grpo_adapter_16x16_c1far_from_e10_e8/episode-100` |
@@ -49,7 +51,7 @@ NanoVLM v0.1 (~222M) + LoRA. MiniGrid Empty, частичный RGB-обзор 7
 | Короткий SFT, GRPO 8×8 | `checkpoints/grpo_adapter_8x8_from_bs32_sft3/episode-75` |
 | Короткий SFT, GRPO 16×16 | `checkpoints/grpo_adapter_16x16_from_bs32_sft3/episode-100` |
 
-В git лежат только старые корни `checkpoints/{sft,grpo}_adapter_{8x8,16x16}`; к цифрам README они не относятся. Весов из таблицы выше в клоне нет. Папку `nanoVLM/` кладут в корень отдельно.
+Весов в git нет: адаптеры из таблицы выше лежат в [romplle/grpo-vs-sft-ood-adapters](https://huggingface.co/romplle/grpo-vs-sft-ood-adapters) по тем же путям (`hf download romplle/grpo-vs-sft-ood-adapters --local-dir checkpoints`). Папку `nanoVLM/` кладут в корень отдельно.
 
 ## 5. Что не входит в README
 

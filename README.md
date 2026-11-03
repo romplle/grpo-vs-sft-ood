@@ -203,6 +203,7 @@ Assistant:
 1. Клонируйте репозиторий и установите зависимости: `pip install -r requirements.txt`. Нужен Python 3.11 или новее; PyTorch ставится в сборке CUDA 13.2 с индекса, указанного в файле.
 2. Скачайте [NanoVLM v0.1](https://github.com/huggingface/nanoVLM/releases/tag/v0.1) и положите папку в корень под именем `nanoVLM`. Веса базовой модели скачиваются с Hugging Face Hub при первом запуске.
 3. Если `wandb` не нужен, добавьте `--no-wandb` к командам обучения.
+4. Обученные LoRA-адаптеры, на которых сняты цифры, лежат в [romplle/grpo-vs-sft-ood-adapters](https://huggingface.co/romplle/grpo-vs-sft-ood-adapters). `hf download romplle/grpo-vs-sft-ood-adapters --local-dir checkpoints` раскладывает их по тем же путям, что в командах ниже.
 
 Датасеты эксперта:
 
@@ -236,8 +237,8 @@ python scripts/test_models.py --env-size 8 --dataset-path datasets/dataset_8x8 -
 Флаги скриптов: `python scripts/<name>.py --help`.
 
 ```text
-vlm-minigrid-rl/
-├── checkpoints/          # в репозитории: sft_adapter_8x8, grpo_adapter_8x8 и пара 16×16
+grpo-vs-sft-ood/
+├── checkpoints/          # не в git: адаптеры скачиваются с Hugging Face Hub (п. 4 «Запуска»)
 ├── datasets/             # экспертные датасеты 8x8 и 16x16
 ├── docs/figures/         # виды среды и схема pipeline
 ├── notebooks/            # ноутбук для ручной проверки

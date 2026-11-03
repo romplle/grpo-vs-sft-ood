@@ -1,5 +1,6 @@
 wandb
 nanoVLM
+checkpoints
 cache*
 docs
 tests/**
