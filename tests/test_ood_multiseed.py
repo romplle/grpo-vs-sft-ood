@@ -71,8 +71,8 @@ class OodMultiseedHelpersTest(unittest.TestCase):
         )
 
     def test_suite_max_steps(self):
-        self.assertEqual(suite_max_steps(SUITES[SUITE_TRANSFER]), 38)
-        self.assertEqual(suite_max_steps(SUITES[SUITE_GOAL_RED]), 16)
+        self.assertEqual(suite_max_steps(SUITES[SUITE_TRANSFER]), 40)
+        self.assertEqual(suite_max_steps(SUITES[SUITE_GOAL_RED]), 12)
 
     def test_payload_env_size_from_config(self):
         payload = _payload(

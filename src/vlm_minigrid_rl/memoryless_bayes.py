@@ -41,7 +41,7 @@ NOTE = (
     "Visible-goal steps use omniscient BFS once vis_mask contains the goal "
     "(on Empty: turn and walk to the seen cell). Walls use the occupancy grid, "
     "which is present in the ego view. This is not a VLM and is not identified "
-    "with GRPO weights. Caps are C1 12/40, not slim 16/38."
+    "with GRPO weights. Eval horizons are 12 on 8×8 and 40 on 16×16."
 )
 
 

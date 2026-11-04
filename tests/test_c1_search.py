@@ -70,10 +70,9 @@ def _triple(method: str, policy: str, success_rate: float, **kwargs) -> list[Cel
 
 
 class HorizonConstantTest(unittest.TestCase):
-    def test_c1_transfer_is_not_slim_eval(self):
+    def test_c1_transfer_matches_profile_eval(self):
         self.assertEqual(C1_EVAL_16X16, 40)
-        self.assertEqual(EMPTY_16X16.eval_max_steps, 38)
-        self.assertNotEqual(C1_EVAL_16X16, EMPTY_16X16.eval_max_steps)
+        self.assertEqual(EMPTY_16X16.eval_max_steps, C1_EVAL_16X16)
 
 
 class FarTruncatedFracTest(unittest.TestCase):

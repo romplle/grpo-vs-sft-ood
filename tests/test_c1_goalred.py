@@ -64,15 +64,14 @@ def _triple(method: str, policy: str, success_rate: float) -> list[CellResult]:
 
 
 class HorizonConstantTest(unittest.TestCase):
-    def test_c1_8x8_is_not_slim_eval(self):
+    def test_c1_8x8_matches_profile_eval(self):
         self.assertEqual(C1_EVAL_8X8, 12)
-        self.assertEqual(EMPTY_8X8.eval_max_steps, 16)
-        self.assertNotEqual(C1_EVAL_8X8, EMPTY_8X8.eval_max_steps)
+        self.assertEqual(EMPTY_8X8.eval_max_steps, C1_EVAL_8X8)
         self.assertGreater(COLOR_RECOVERS_MIN, 90.0)
 
-    def test_c1_goalred_is_not_slim_eval(self):
+    def test_c1_goalred_matches_profile_eval(self):
         self.assertEqual(C1_EVAL_8X8, 12)
-        self.assertEqual(EMPTY_8X8.eval_max_steps, 16)
+        self.assertEqual(EMPTY_8X8.eval_max_steps, C1_EVAL_8X8)
 
 
 class RecolorTest(unittest.TestCase):

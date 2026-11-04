@@ -1,6 +1,6 @@
 """C1 goal-red PAINT: same red layouts, recolor goal to green, prompt stays red.
 
-Eval-only. Empty 8x8 uses the C1 cap (12), not slim eval_max_steps (16).
+Eval-only. Empty 8×8 eval horizon is 12, the same as the profile default.
 """
 
 from __future__ import annotations

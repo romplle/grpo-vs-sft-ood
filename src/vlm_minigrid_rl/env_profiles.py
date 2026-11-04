@@ -5,7 +5,8 @@ name the same Empty stand.
 
 Step horizons (train != eval):
   train_max_steps = L_max (worst-case BFS-optimal action count).
-  eval_max_steps  = L_max + max(4, p95_steps_to_see).
+  eval_max_steps  = the horizons used for the reported numbers: 12 on 8×8
+  and 40 on 16×16.
   GRPO pins MiniGrid ``env.unwrapped.max_steps`` to the train horizon so
   reward ``1 - 0.9 * t / max_steps`` prefers shorter wins.
 """
@@ -59,7 +60,7 @@ EMPTY_8X8 = EnvProfile(
     action_names=tuple(ACTION_NAMES),
     action_to_id=MappingProxyType(dict(ACTION_TO_ID)),
     train_max_steps=12,
-    eval_max_steps=16,
+    eval_max_steps=12,
     dataset_slug="8x8",
     kind="empty",
     val_split=0.1,
@@ -72,7 +73,7 @@ EMPTY_16X16 = EnvProfile(
     action_names=tuple(ACTION_NAMES),
     action_to_id=MappingProxyType(dict(ACTION_TO_ID)),
     train_max_steps=28,
-    eval_max_steps=38,
+    eval_max_steps=40,
     dataset_slug="16x16",
     kind="empty",
     val_split=0.01,

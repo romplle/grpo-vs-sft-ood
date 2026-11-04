@@ -1,6 +1,6 @@
 """C1 search-then-generate: G1 plus oracle walk-to-see on far starts.
 
-Eval-only. Transfer 16x16 uses the C1 cap (40), not slim eval_max_steps (38).
+Eval-only. Transfer 16×16 eval horizon is 40, the same as the profile default.
 """
 
 from __future__ import annotations
